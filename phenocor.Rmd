@@ -41,11 +41,18 @@ phenocor<-function(data1,data2,covarf,sample){ #with covariates
   result$trait<-colnames(data1)
   return(result)
 }
+```
 
-print_scientific <- function(x, digits = 3) {
-  # 格式化显示但保持数值类型
-  formatted <- format(x, scientific = TRUE, digits = digits)
-  formatted <- gsub("e-0", "e-", formatted)
-  return(formatted)
-}
+## Calculate phenotype correlations
+```{r phenocor,echo=FALSE,eval=FALSE}
+load('pheno.Combat.rda')
+covar<-read.delim('covar.33716.txt')
+pthreshold<-0.05/(413+872)
+
+result.topo<-phenocor(DTItopo,rfMRItopo,covar,rownames(DTItopo))
+result.edge<-phenocor(SC,FC,covar,rownames(SC))
+
+result<-rbind(result.topo,result.edge)
+result$group<-c(rep('topo',nrow(result.topo)),rep('edge',nrow(result.edge)))
+write.table(result,'phenocor.txt',quote = F,sep="\t",row.names = F)
 ```
