@@ -1,0 +1,370 @@
+#!/bin/sh -f
+
+usage ()
+{
+cat <<__EOM__
+==================== display and save 2D images ====================
+Usage: bqw_sliceview --inp=<input.nii> [options]"
+--------------------------------------------------------------------
+Options:
+--overlay:	nifti images need overlay,""=none (default)
+--omod   :	overlay mode, "colormap"(default),"outline" 
+--lb	 :	lower signal threshold for background image,""=auto (default)
+--ub	 :	upper signal threshold for background image,""=auto (default)
+--lo	 :	lower signal threshold for overlay image,""=auto (default)
+--uo	 :	upper signal threshold for overlay image,""=auto (default)
+--reslice :	image reslice size (mm),""=none (default)
+--scale	 :	scale factor to resize the png (times),1 (default)
+--out	 :	output png file,"\$PWD/\$input.png" (default)
+--row	 :	display num. rows, 1 (default)
+--col	 :	display num. columns,9 (default)
+--layout :	layout orientation,"orth3"=3 orthogonal (default)，“orth9”=9 orthogonal,
+                "ax"=axial,"cor"=coronal,"sag"=saggital
+--disp	 :	display using eog tool,"yes"(default),"no"
+--------------------Qin,Wen at 20190619------------------------------
+
+__EOM__
+exit 0
+}
+
+if [ $# -lt 1 ];then
+usage
+exit 0
+fi 
+
+#intialize opts
+inp=""
+overlay=""
+omod="colormap"
+lb=""
+ub=""
+lo=""
+uo=""
+reslice="" # in mm
+scale=1
+out=""
+row=1
+col=9
+layout=orth3 #oth9 ax sag cor 
+lut=$FSLDIR/etc/luts/render1.lut
+disp="no"
+
+# loop
+while [ -n "$1" ]; do
+optname=${1%=*}
+optarg=${1##*=}
+#echo optname=$optname 
+#echo optarg=$optarg
+  case "$optname" in
+        --inp)
+		inp=$optarg
+		shift
+		;;
+	--overlay)
+                overlay=$optarg
+                shift
+                ;;
+	--omod)
+		omod=$optarg
+		shift
+		;;
+        --lb)
+                lb=$optarg
+                shift
+                ;;
+        --ub)
+                ub=$optarg
+                shift
+                ;;
+        --lo)
+                lo=$optarg
+                shift
+                ;;
+        --uo)
+		uo=$optarg
+		shift
+		;;
+	--reslice)
+		reslice=$optarg
+		shift
+		;;
+	--scale)
+		scale=$optarg
+		shift
+		;;
+	--row)
+		row=$optarg
+		shift
+		;;
+	--col)
+		col=$optarg
+		shift
+		;;
+	--out)
+                out=$optarg
+                shift
+                ;;
+        --layout)
+                layout=$optarg
+                shift
+                ;;
+	--disp)
+		disp=$optarg
+		shift
+		;;
+	--lut)
+		lut=$optarg
+		shift
+		;;
+	*)
+		echo "Error options define:$1"
+		usage
+                ;;
+   esac
+done
+
+if [ "$layout" == "orth3" ];then
+row=1
+col=3
+elif [ "$layout" == "orth9" ];then
+row=1
+col=9
+fi
+
+if [ ! -f $inp ];then
+echo "Missing input image: $inp"
+usage
+fi
+${FSLDIR}/bin/remove_ext
+if [ -z "$out" ];then 
+fbase=`${FSLDIR}/bin/remove_ext $inp`
+out=${fbase}.png;
+fi
+if [ "${out##*.}" != "png" ];then
+out=${out}.png
+fi
+
+echo -e "\n\n======Arguments======\n--input:  $inp"
+echo --output:  $out
+echo --overlay:  $overlay
+echo --overlay mode:  $omod
+echo --reslice size:  $reslice mm
+echo --scale times :  $scale
+echo --display rows:  $row
+echo --display columns:  $col
+echo --display layout:  $layout
+echo --display color lookup table:  $lut
+echo --dislpay popup:  $disp
+
+
+tmpdir=/tmp/`date +%s%N`
+/bin/rm -rf $tmpdir
+mkdir $tmpdir -p
+
+echo -e "1 0 0 0\n0 1 0 0\n0 0 1 0\n 0 0 0 1" > $tmpdir/identity
+
+${FSLDIR}/bin/fslmaths $inp -nan $tmpdir/background
+inp=$tmpdir/background.nii.gz
+if [ -n "$reslice" ];then
+echo ${FSLDIR}/bin/flirt -in $inp -ref $inp -applyisoxfm $reslice -init $tmpdir/identity  -o $tmpdir/background
+${FSLDIR}/bin/flirt -in $inp -ref $inp -applyisoxfm $reslice -init $tmpdir/identity  -o $tmpdir/background
+inp=$tmpdir/background.nii.gz
+fi
+
+dimx=`fslinfo $inp|grep "^dim1 "|awk '{print $2}'`
+dimy=`fslinfo $inp|grep "^dim2 "|awk '{print $2}'`
+dimz=`fslinfo $inp|grep "^dim3 "|awk '{print $2}'`
+widthx=`echo ${dimx}*${col}+1 |bc`
+widthy=`echo ${dimy}*${col}+1 |bc`
+widthz=`echo ${dimz}*${col}+1 |bc`
+if  [ -n "$overlay" ];then
+	if [ ! -f "$overlay" ];then
+	echo "Error, overlay file is missing: $overlay"
+	exit 1
+        else
+	ox=`fslinfo $overlay|grep "^dim1 "|awk '{print $2}'`
+	oy=`fslinfo $overlay|grep "^dim2 "|awk '{print $2}'`
+	oz=`fslinfo $overlay|grep "^dim3 "|awk '{print $2}'`
+	bgdim=`echo $dimx*$dimy*$dimz|bc`
+	ovdim=`echo $ox*$oy*$oz|bc`
+		if [ $bgdim != $ovdim ];then
+ 		${FSLDIR}/bin/flirt -in $overlay -ref $inp -applyxfm -init $tmpdir/identity  -o $tmpdir/overlay.nii.gz -interp nearestneighbour
+		overlay=$tmpdir/overlay.nii.gz
+		${FSLDIR}/bin/fslmaths $overlay -nan $overlay
+		fi
+	fi
+fi
+
+if [ -n "$lb" ]&[ -n "$ub" ];then
+	if [ "$omod" == "colormap" ];then
+	bthr="$lb $ub"
+	else
+	bthr="-i $lb $ub"
+	fi
+else
+	if [ "$omod" == "colormap" ];then
+	bthr="-a"
+	else
+	bthr=""
+	fi
+fi
+
+if  [ -n "$lo" ]&[ -n "$uo" ];then
+	if [ "$omod" == "colormap" ];then
+	othr="$lo $uo"
+	else
+	othr="-e $lo"
+	fi
+else
+	if [ "$omod" == "colormap" ];then
+	othr="0.1 10"  #zval of p<0.001
+	else
+	othr="" 
+	fi
+fi
+echo lo=$lo omod=$omod
+if [ -n "$lo" ];then
+	if [ "$omod" == "outline" ];then
+	othr="-e $lo"
+	fi
+fi
+
+
+echo -e "--background threshold(low upper):  $bthr\n--overlay threshold(low upper):  $othr"
+## overlap the background and overlay
+if [ "$omod" == "colormap" ];then
+	if [ -n "$overlay" ];then
+#	echo ${FSLDIR}/bin/overlay 0 0 $inp $bthr $overlay $othr $tmpdir/merged.nii.gz
+	${FSLDIR}/bin/overlay 0 0 $inp $bthr $overlay $othr $tmpdir/merged.nii.gz
+	inp=$tmpdir/merged.nii.gz
+	fi
+fi
+
+
+stepsize=`echo "scale=3;0.98/${row}/${col}"|bc`
+stepsize=`echo $stepsize|awk '{printf("%0.0f",1000*$stepsize)}'`
+pid=50
+idx=1
+idxcol=1
+sliceropts="";
+convertopts="";
+echo step=$stepsize/1000  pid=$pid idx=$idx idxcol=$idxcol
+case "$layout" in
+	orth3)             
+     		sliceropts="-a $tmpdir/grota.png"
+		convertopts="$tmpdir/grota.png"
+                ;;
+	orth9)
+		sliceropts="-x 0.4 $tmpdir/grota.png -x 0.5 $tmpdir/grotb.png -x 0.6 $tmpdir/grotc.png -y 0.4 $tmpdir/grotd.png -y 0.5 $tmpdir/grote.png -y 0.6 $tmpdir/grotf.png -z 0.4 $tmpdir/grotg.png -z 0.5 $tmpdir/groth.png -z 0.6 $tmpdir/groti.png"
+		convertopts="$tmpdir/grota.png + $tmpdir/grotb.png + $tmpdir/grotc.png + $tmpdir/grotd.png + $tmpdir/grote.png + $tmpdir/grotf.png + $tmpdir/grotg.png + $tmpdir/groth.png + $tmpdir/groti.png"
+		;;
+	ax)
+#		stepsize=`echo "scale=2;0.95/${row}/${col}"|bc`
+#		stepsize=`echo $stepsize|awk '{printf("%0.0f",100*$stepsize)}'`		      pid=5
+		while [ $pid -le 1000 ];do
+			#echo pid=$pid idx=$idx idxcol=$idxcol
+			if [ $idx -lt 10 ];then
+				idx="00$idx"
+			elif [ $idx -lt 100 ];then
+			    	idx="0$idx"
+			fi
+			k=`echo "scale=3;$pid/1000"|bc`
+		  	sliceropts="$sliceropts -z $k $tmpdir/grot${idx}.png ";
+			if [ ${idxcol} -le $col ];then
+				convertopts="$convertopts + $tmpdir/grot${idx}.png ";
+			else
+				convertopts="$convertopts - $tmpdir/grot${idx}.png ";
+				idxcol=1
+			fi
+			idxcol=`echo ${idxcol}+1|bc`
+			idx=`echo ${idx}+1|bc`
+			pid=`echo ${pid}+$stepsize|bc`
+		done
+		convertopts=${convertopts#*+}
+		;;
+	sag)
+#		stepsize=`echo "scale=2;0.95/${row}/${col}"|bc`
+#		stepsize=`echo $stepsize|awk '{printf("%0.0f",100*$stepsize)}'`
+#		pid=5       
+                while [ $pid -lt 1000 ];do
+                       #echo pid=$pid idx=$idx idxcol=$idxcol
+                        if [ $idx -lt 10 ];then
+                                idx="00$idx"
+                        elif [ $idx -lt 100 ];then
+                                idx="0$idx"
+                        fi
+                        k=`echo "scale=3;$pid/1000"|bc`
+                        sliceropts="$sliceropts -x $k $tmpdir/grot${idx}.png ";
+                        if [ ${idxcol} -le $col ];then
+                                convertopts="$convertopts + $tmpdir/grot${idx}.png ";
+                        else
+                                convertopts="$convertopts - $tmpdir/grot${idx}.png ";
+                                idxcol=1
+                        fi
+                        idxcol=`echo ${idxcol}+1|bc`
+                        idx=`echo ${idx}+1|bc`
+                        pid=`echo ${pid}+$stepsize|bc`
+                done
+                convertopts=${convertopts#*+}
+		;;	
+	cor)
+#		stepsize=`echo "scale=2;0.95/${row}/${col}"|bc`
+#		stepsize=`echo $stepsize|awk '{printf("%0.0f",100*$stepsize)}'`
+#		pid=5
+                while [ $pid -lt 1000 ];do
+                        #echo pid=$pid idx=$idx idxcol=$idxcol
+                        if [ $idx -lt 10 ];then
+                                idx="00$idx"
+                        elif [ $idx -lt 100 ];then
+                                idx="0$idx"
+                        fi
+                        k=`echo "scale=3;$pid/1000"|bc`
+                        sliceropts="$sliceropts -y $k $tmpdir/grot${idx}.png ";
+                        if [ ${idxcol} -le $col ];then
+                                convertopts="$convertopts + $tmpdir/grot${idx}.png ";
+                        else
+                                convertopts="$convertopts - $tmpdir/grot${idx}.png ";
+                                idxcol=1
+                        fi
+                        idxcol=`echo ${idxcol}+1|bc`
+                        idx=`echo ${idx}+1|bc`
+                        pid=`echo ${pid}+$stepsize|bc`
+                done
+                convertopts=${convertopts#*+}
+		;;
+
+esac
+
+#echo sliceopts: $sliceropts
+#echo convertopts: $convertopts
+
+#echo overlay $overlay
+if [ -n "$lut" ];then
+lut="-l $lut"
+fi
+if [ -n "$overlay" ];then
+	if [ $omod == "outline" ] ; then
+#	echo ${FSLDIR}/bin/slicer $inp -p $overlay $lut -L $othr $sliceropts
+	${FSLDIR}/bin/slicer $inp -p $overlay $lut -L $othr $sliceropts
+	else
+	colourmap=$FSLDIR/etc/luts/colourbar.nii.gz
+#	echo ${FSLDIR}/bin/slicer $inp $lut -s $scale -L $sliceropts 
+	${FSLDIR}/bin/slicer $inp $lut -s $scale -L $sliceropts
+	colorscale=`echo $scale*2|bc`
+#	echo ${FSLDIR}/bin/slicer $colourmap $lut  -s $colorscale -u -z 1 $tmpdir/color.png
+	${FSLDIR}/bin/slicer $colourmap $lut  -s $colorscale -u -z 1 $tmpdir/color.png
+	convertopts="$convertopts - $tmpdir/color.png"
+	fi
+else
+#        echo ${FSLDIR}/bin/slicer $inp -s $scale -L $sliceropts
+        ${FSLDIR}/bin/slicer $inp -s $scale -L $sliceropts
+fi
+
+#echo ${FSLDIR}/bin/pngappend $convertopts  $out
+${FSLDIR}/bin/pngappend $convertopts  $out
+if [ "$disp" == "yes" ];then
+eog $out
+wait
+fi
+/bin/rm -rf $tmpdir
+echo -e "------finish sliceview: $out\n"

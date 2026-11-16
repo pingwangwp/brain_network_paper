@@ -1,0 +1,637 @@
+#!/bin/bash
+## env setup&check
+source ~/.bashrc
+chimgen=`dirname $0`
+#module add GCC/4.8.5
+#module add MPI/openmpi-2.0.2/gcc4.8.5
+
+##############################
+#main code
+##############################
+main ()
+{
+init_args ${1+"$@"}
+run_pipe
+exit 0
+}
+
+##############################
+#initialize arguments
+##############################
+init_args ()
+{
+count=0
+if [ $# -lt 1 ]; then
+    usage
+    exit 1
+fi
+while [ $# -gt 0 ]; do
+optname=${1%=*}
+optarg=${1##*=}
+empty_arg $optname $optarg
+  case "$optname" in
+        --datain)
+                DIFF_orig=$optarg
+                shift
+                ;;
+        --outdir)
+                PIPE_DIFF_DIR=$optarg
+                shift
+                ;;
+        --t1dir)
+                PIPE_T1_DIR=$optarg
+                shift
+                ;;
+        --t1data)
+                T1_orig=$optarg
+                shift
+                ;;
+        --model)
+                model=$optarg
+                shift
+                ;;
+        --fibmodel)
+                fibmodel=$optarg
+                shift
+                ;;
+        --gradT)
+                gradT=$optarg
+                shift
+		;;
+        --pipe)
+                pipe=$optarg
+                shift
+                ;;
+	--voxsize)
+		voxsize=$optarg
+                shift
+		;;
+        --scale)
+                scale=$optarg
+                shift
+                ;;
+        --betthr)
+                betthr=$optarg
+                shift
+                ;;
+        *)
+                echo "${0}:Unrecognized option \"$1\""
+                exit 1
+                ;;
+        esac
+done
+
+if [ -z "$DIFF_orig" ];then
+        echo "Error:Missing parameters, datain=$DIFF_orig";
+usage
+        exit 1
+fi
+
+if [ -z "$PIPE_DIFF_DIR" ];then
+if [ ${DIFF_orig%/*} = ${DIFF_orig} ];then
+PIPE_DIFF_DIR=$PWD
+else
+PIPE_DIFF_DIR=${DIFF_orig%/*}
+fi
+fi
+
+if [ -z "$PIPE_T1_DIR" ];then PIPE_T1_DIR="";fi
+if [ -z "$T1_orig" ];then T1_orig="";fi
+if [ -z "$model" ];then model=dti;fi
+if [ -z "$fibmodel" ];then fibmodel=dti;fi
+#if [ -z "$gradT" ];then gradT="-iz";fi
+if [ -z "$pipe" ];then pipe="full";fi
+if [ -z "$voxsize" ];then voxsize="2";fi
+if [ -z "$betthr" ];then betthr=0.2;fi
+if [ -z "$scale" ];then scale="no";fi
+echo --Diffusion original data: $DIFF_orig
+echo --Diffusion Pipeline directory: $PIPE_DIFF_DIR
+echo --T1 Pipeline directory:$PIPE_T1_DIR
+echo --T1 original data:$T1_orig
+echo --Diffusion quantification model: $model
+echo --Orientation estimation model:$fibmodel
+echo --Gradient transform: $gradT
+echo --Pipeline name: $pipe
+echo --normalize voxsize:$voxsize
+}
+
+
+#############################
+#run pipeline
+#############################
+run_pipe ()
+{
+##initialize parameters
+DIFFname=${DIFF_orig##*/}
+DIFF_orig_DIR=${DIFF_orig%/*}
+DIFF=${PIPE_DIFF_DIR}/$DIFFname
+bval=${PIPE_DIFF_DIR}/bvals
+bvec=${PIPE_DIFF_DIR}/bvecs
+postfix=`date +%Y-%m-%d-%h-%m-%s-%N`
+logpath=${PIPE_DIFF_DIR}/log/pipeline_diff_${postfix}.log
+command_records=${PIPE_DIFF_DIR}/log/commands_${postfix}.sh
+echo logpath=${logpath%/*}
+if [ ! -d ${logpath%/*} ];then
+mkdir ${logpath%/*} -p
+fi
+
+# echo to file 
+echof() {
+echo $@ >>$logpath  
+echo $@
+}
+
+# run and record commands/logs
+run() {
+echo $@ 
+echo $@ >> $command_records
+echo $@ >> $logpath
+$@ >> $logpath 2>&1
+}
+
+
+
+##prepare data
+# log
+starttime=`date +'%Y-%m-%d %H:%M:%S'`
+start_seconds=$(date --date="$starttime" +%s)
+echof -e "======= Start difffusion pipeline in `hostname`======="
+echof -e "Start time: $starttime"
+echof -e "------Configuration------\n--Diffusion original: ${DIFF_orig}"
+echof -e "--Diffusion Pipeline directory:${PIPE_DIFF_DIR}"
+echof -e "--T1 Pipeline directory:${PIPE_T1_DIR}"
+echof -e "--T1 original:${T1_orig}"
+echof -e "--Diffusion quantification model: $model"
+echof -e "--Fiber orientation model: $fibmodel"
+echof -e "--Gradient transoformation: $gradT"
+echof -e "--Pipeline: $pipe"
+echof -e "--normalize voxsize:$voxsize "
+echof -e "--SCRIPT DIRECTORY: ${chimgen}\n"
+echof -e "------check/prepare data------"
+# check diffusion directory
+echof -e "--check PIPE_DIFF_DIR: $PIPE_DIFF_DIR"
+if [ ! -d "$PIPE_DIFF_DIR" ];then
+run mkdir -p ${PIPE_DIFF_DIR}
+fi
+# check/copy diffusion data
+#echof -e "--check diffusion data :${DIFF}"
+#if [ ! -f "${DIFF}" ];then
+#run cp ${DIFF_orig} ${PIPE_DIFF_DIR}/ 
+#run cp ${DIFF_orig_DIR}/bv*s ${PIPE_DIFF_DIR}/
+#fi
+#if [ ! -f "${DIFF}"  ];then
+#echof "missing diffusion data:${DIFF}\n please check the original diffusion path: ${DIFF_orig}"
+#exit 1
+#fi
+# check T1 directory/data
+if [ $pipe != "prep" ];then
+echof -e "--check PIPE_T1_DIR:${PIPE_T1_DIR}" 
+if [ ! -d $PIPE_T1_DIR ];then
+run mkdir -p ${PIPE_T1_DIR};
+fi
+tmpT1=`ls -S ${PIPE_T1_DIR}/*.nii*`
+if [ ! -z "$tmpT1" ] ;then
+T1=$(echo $tmpT1|awk '{print $1}')
+else
+if [ -f "${T1_orig}" ];then
+run cp ${T1_orig} $PIPE_T1_DIR/
+T1=${PIPE_T1_DIR}/${T1_orig##*/}
+else
+echof -e "Error: missing T1 data in either [${T1_orig%/*}] or [$PIPE_T1_DIR]"
+fi
+fi
+fi
+echof -e "T1 path: $T1"
+## ----main code ----
+echof -e "\n\n++++++++++ main code ++++++++++"
+#scale DIFF signal with mean value of 200
+if [ "$scale" != "no" ]
+then 
+msignal=`fslstats $DIFF -M`
+echof fslmaths $DIFF -div $msignal -mul 200 $DIFF
+fi
+# bet
+t1=`date +%s`
+mask=${PIPE_DIFF_DIR}/eddy/nodif_brain_mask.nii.gz
+#b0=${PIPE_DIFF_DIR}/eddy/nodif_brain.nii.gz
+echof -e "Step[1]: Brain Extract(bet)\n===="
+
+
+#if [ ! -f "$mask" ];then
+#run bet ${DIFF} $b0 -f $betthr -R -m
+#else
+#echof -e "brain mask already exist:$mask"
+#fi
+t2=`date +%s`
+tu=$((t2-t1))
+echof -e "------finish brain extraction in $tu seconds ------\n"
+
+# step2-1 eddy_openmp
+t1=`date +%s`
+echof -e "\nStep[2]: Motion and distortion correction(eddy_openmp)\n===="
+EDDY_DIR=${PIPE_DIFF_DIR}/eddy
+PEindex=${EDDY_DIR}/PE_index
+acqparams=${EDDY_DIR}/acqparams.txt
+eddy=${EDDY_DIR}/data
+echof -e "EDDY DIRECTORY: ${EDDY_DIR}"
+echof -e "EDDY output: ${eddy}"
+echof -e "PE index:${PEindex}"
+echof -e "acqpamams:${acqparams}"
+if [ ! -f "${eddy}_brain.nii.gz" ];then
+
+if [ ! -d ${EDDY_DIR} ];then
+run mkdir ${EDDY_DIR} -p
+fi
+
+echof -e "EDDY DIRECTORY: ${EDDY_DIR}"
+echof -e "EDDY output: ${eddy}"
+
+if [ ! -f  $PEindex ];then
+dim4=`fslinfo $DIFF |grep "^dim4"|awk '{print $2}'`
+for i in `seq 1 $dim4`;do if [ $i = "1" ];then echo -e "1 \c"> $PEindex;else echo -e "1 \c" >> $PEindex;fi;done
+fi
+
+if [ ! -f $acqparams ];then
+run cp ${chimgen}/acqparams.txt ${EDDY_DIR}/
+fi
+
+eddy_cmd="$FSLDIR/bin/eddy_openmp --imain=$DIFF  --out=${eddy} --mask=$mask --index=$PEindex --acqp=$acqparams --bvecs=$bvec --bvals=$bval --ol_nstd=4 --repol --residuals  --cnr_maps"
+echo -e "====\ncommand:${eddy_cmd}"
+run $eddy_cmd
+run cp  ${eddy}.eddy_rotated_bvecs ${EDDY_DIR}/bvecs # replace the bvecs with corrected ones(using eddy)
+run cp $bval ${EDDY_DIR}/
+run cp $mask ${EDDY_DIR}/
+else
+echof -e "eddy corrected file already exist: $eddy"
+fi
+t2=`date +%s`
+tu=$((t2-t1))
+echof -e "------finish eddy correction in $tu seconds------\n"
+
+## step2-2 eddy_QC
+#QC_DIR=${PIPE_DIFF_DIR}/eddy_qc
+#if [ ! -d "${QC_DIR}" ];then
+#$FSLDIR/bin/eddy_quad $eddy -idx $PEindex -par $acqparams -m $mask -b $bval -o ${QC_DIR}
+#fi
+
+#scale diffusing image with mean
+msignal=`fslstats ${eddy} -M`
+if [ ${msignal%.*} -gt 1000 ];then
+run fslmaths ${eddy} -div $msignal -mul 200 ${eddy} # -div 除法 
+fi
+# skullstrip the 4D data
+if [ -f ${eddy}.nii.gz ] & [ ! -f ${eddy}_brain.nii.gz ];then
+run fslmaths ${eddy} -mas ${mask} ${eddy}_brain
+fi
+
+# step3 dtifit/dkifit  #################我不想跑dtifit
+
+if  [ ! -f ${eddy}_brain.nii.gz ];then
+run fslmaths ${eddy} -mas ${mask} ${eddy}_brain
+fi
+
+if  [ $pipe != "prep" ];then
+t1=`date +%s`
+if [  $model = "dti" ];then
+echof -e "Step[3]: DTI reconstruction(dtifit)"
+DIFF_FIT_DIR=${PIPE_DIFF_DIR}/fdt
+
+if [ ! -d ${DIFF_FIT_DIR} ];then
+run mkdir  ${DIFF_FIT_DIR}
+fi
+
+if [ ! -f "${DIFF_FIT_DIR}/fdt_FA.nii.gz" ];then
+dtifit_cmd="dtifit -k ${eddy}_brain -o ${DIFF_FIT_DIR}/fdt -m ${mask} -r ${EDDY_DIR}/bvecs -b ${EDDY_DIR}/bvals"
+echo -e "====\ncommand:$dtifit_cmd"
+run $dtifit_cmd
+#run fslmaths ${DIFF_FIT_DIR}/fdt_L1 -add  ${DIFF_FIT_DIR}/fdt_L2 -div 2  ${DIFF_FIT_DIR}/fdt_L23
+run fslmaths ${DIFF_FIT_DIR}/fdt_FA -nan -min 1 -ero -bin ${DIFF_FIT_DIR}/erod_mask
+for m in FA # L1 L2 L3 L23 MD MO;
+do
+run fslmaths ${DIFF_FIT_DIR}/fdt_${m} -mul ${DIFF_FIT_DIR}/erod_mask ${DIFF_FIT_DIR}/fdt_${m}_clean
+done
+else
+echof -e "dtifit files already exist: ${DIFF_FIT_DIR}"
+fi
+fi
+
+if [ $model = "dki" ];then
+
+echof -e "\nStep[3]: DKI reconstruction(dki_nyu)"
+DIFF_FIT_DIR=${PIPE_DIFF_DIR}/dki
+
+if [ ! -d ${DIFF_FIT_DIR} ];then
+run mkdir  ${DIFF_FIT_DIR}
+fi
+
+if [ ! -f "${DIFF_FIT_DIR}/dki_mk.nii.gz" ];then
+
+cmd1="addpath(genpath('$chimgen'))"
+cmd1="$cmd1;dki_nyu('${eddy}.nii.gz','$bval','$bvec','${mask}','${DIFF_FIT_DIR}','mppca');exit"
+cmd1="matlab -nosplash -nodesktop -r \"$cmd1\""
+echof -e "====\n$cmd1"
+tmp=/tmp/bqw_pipe_dki_`date +%Y-%m-%d-%h-%m-%s-%N`
+echo $cmd1 >$tmp
+chmod +x $tmp
+run $tmp
+wait
+fi
+if [ ! -f "${DIFF_FIT_DIR}/dki_mk_clean.nii.gz" ];then
+run fslmaths ${DIFF_FIT_DIR}/dki_fa -nan -min 1 -ero -bin ${DIFF_FIT_DIR}/erod_mask
+for m in ad ak awf eas_de1 eas_de2 eas_de3 eas_de_perp eas_tort fa ias_da1 ias_da2 ias_da3 ias_Da ias_da_perp md mk rd rk;do
+run fslmaths ${DIFF_FIT_DIR}/dki_${m} -mul ${DIFF_FIT_DIR}/erod_mask ${DIFF_FIT_DIR}/dki_${m}_clean
+done
+
+fi
+fi
+t2=`date +%s`
+tu=$((t2-t1))
+echof -e "------finish dti/dki reconstruction in $tu seconds ------ \n"
+fi
+
+#setp4 dtk
+if  [ $pipe != "prep" ]&&[ $pipe != "quant" ] ;then
+t1=`date +%s`
+echo -e "Step[4]: Deterministic fiber estimation (dtk)"
+echo -e "\nStep[4]: Deterministic fiber estimation (dtk)\n====" >> $logpath
+DTK_DIR=${PIPE_DIFF_DIR}/dtk
+ndiff=`cat ${EDDY_DIR}/bvals|head -n1 | awk -F ' ' '{print NF}'`
+echof -e "Config:\nDTK Directory:${DTK_DIR}\nFiber orientation model:${fibmodel}\nGradient Transform:$gradT"
+
+if [ ! -d ${DTK_DIR} ];then
+run mkdir ${DTK_DIR}
+fi
+
+if [ ! -f ${DTK_DIR}/dtk.dgt ];then
+awk '{for(i=1;i<=NF;i=i+1){a[NR,i]=$i}}END{for(j=1;j<=NF;j++){str=a[1,j];for(i=2;i<=NR;i++){str=str " " a[i,j]}print str}}' ${EDDY_DIR}/bvals >${DTK_DIR}/bvalsT
+awk '{for(i=1;i<=NF;i=i+1){a[NR,i]=$i}}END{for(j=1;j<=NF;j++){str=a[1,j];for(i=2;i<=NR;i++){str=str " " a[i,j]}print str}}' ${EDDY_DIR}/bvecs >${DTK_DIR}/bvecsT
+awk '{print NR,$1}' ${DTK_DIR}/bvalsT >${DTK_DIR}/tmp2
+awk '{print NR,$1,$2,$3}' ${DTK_DIR}/bvecsT >${DTK_DIR}/tmp1
+join ${DTK_DIR}/tmp1 ${DTK_DIR}/tmp2 |awk '{print $2,$3,$4,$5}' > ${DTK_DIR}/tmp
+grep -v '^\s*$' ${DTK_DIR}/tmp >${DTK_DIR}/tmp1
+sed 's/ /,/g' ${DTK_DIR}/tmp1 >${DTK_DIR}/dtk_dgt
+nb0=0;
+nbx=0;
+
+for i in `seq 1 $ndiff`;do 
+bv=$(awk "{print $`echo $i`}" ${EDDY_DIR}/bvals)
+if [ $bv = "5" ];then
+nb0=$(echo ${nb0}+1|bc);
+else
+nbx=$(echo ${nbx}+1|bc);
+fi
+done
+echo "$nb0"
+echo "$nbx"
+tail -n $nbx ${DTK_DIR}/dtk_dgt > ${DTK_DIR}/hardi_dgt
+rm ${DTK_DIR}/tmp* -f
+rm ${DTK_DIR}/bv*T -f
+fi
+
+if [ $pipe = "full" ]||[ $fibmodel = "dti" ];then
+if [ ! -f ${DTK_DIR}/dtk.trk ];then
+echof -e "\n4-1: Fiber estimation using tensor model"
+cmd1="dti_recon ${eddy}_brain.nii.gz ${DTK_DIR}/dtk -gm ${DTK_DIR}/hardi_dgt -b0 $nb0 -ot nii.gz"
+cmd2="dti_tracker ${DTK_DIR}/dtk ${DTK_DIR}/dtk.trk -at 80 $gradT  -m ${DIFF_FIT_DIR}/fdt_FA_clean.nii.gz  0.1 1 -it nii.gz"
+cmd3="spline_filter ${DTK_DIR}/dtk.trk 1 ${DTK_DIR}/dtkS.trk"
+run $cmd1
+run $cmd2
+run $cmd3
+fi
+fi
+
+if [ $pipe = "full" ]||[ $fibmodel = "hardi" ];then
+if [ ! -f ${DTK_DIR}/hardi.trk ];then
+echof -e "\n4-2: Fiber estimation using hardi/q-ball model"
+dtk1=`which dtk`
+DSI_PATH=${dtk1%/*}/matrices
+export DSI_PATH
+cmd1="hardi_mat ${DTK_DIR}/hardi_dgt ${DTK_DIR}/hardi_mat.dat -ref ${eddy}_brain.nii.gz"
+cmd2="odf_recon ${eddy}_brain.nii.gz $(echo ${nbx}+1|bc) 181 ${DTK_DIR}/hardi -b0 $nb0 -mat ${DTK_DIR}/hardi_mat.dat -ot nii.gz"
+
+cmd3="odf_tracker ${DTK_DIR}/hardi ${DTK_DIR}/hardi.trk -at 80 $gradT -m ${DIFF_FIT_DIR}/fdt_FA_clean.nii.gz 0.1 1 -it nii.gz"
+t3=`date +%s`
+#cmd4="spline_filter ${DTK_DIR}/hardi.trk 1 ${DTK_DIR}/hardiS.trk"
+t4=`date +%s`
+tuS=$((t4-t3))
+echof -e "------spline_filter estimation in $tuS seconds ------\n"
+
+run $cmd1
+run $cmd2
+run $cmd3
+#run $cmd4
+fi
+fi
+t2=`date +%s`
+tu=$((t2-t1))
+echof -e "------finish deterministic fiber estimation in $tu seconds ------\n"
+fi
+
+# bedpostx
+if  [ $pipe = "full" ]||[ $fibmodel = "bedpostx" ];then
+t1=`date +%s`
+BEDPOSTX_DIR=${PIPE_DIFF_DIR}/bedpostX
+echof "Step[5]: Probabilistic fiber orientation estimation(bedpostx)\n===="
+if [ ! -f "${BEDPOSTX_DIR}/merged_f1samples.nii.gz" ];then
+bedpostx_cmd="bedpostx ${EDDY_DIR}"
+echof "command:${bedpostx_cmd}"
+echof "output directory:${BEDPOSTX_DIR}"
+run ${bedpostx_cmd}
+run mv  ${EDDY_DIR}.bedpostX  ${BEDPOSTX_DIR}
+else
+echof "BEDPOSTX data already exist:${BEDPOSTX_DIR}"
+fi
+t2=`date +%s`
+tu=$((t2-t1))
+echof -e "------finished BedpostX in $tu seconds ------ \n"
+fi 
+
+# normalization
+# if [ $pipe != "prep" ];then
+# t1=`date +%s`
+# echof -e  "Step[6]: Spatial normalization estimation(bbr+dartel)\n===="
+# NORM_DIR=${PIPE_DIFF_DIR}/normalize
+# 
+# if [ ! -d ${PIPE_T1_DIR} ];then
+# run mkdir ${PIPE_T1_DIR} -p
+# fi
+# 
+# if [ ! -d ${NORM_DIR} ];then
+# run mkdir  ${NORM_DIR} -p
+# fi
+# 
+# echof "Normalizatoin directory: ${NORM_DIR}"
+# echof "Normalization methods: bbr (diff2str) + dartel (str2MNI)" 
+# echof "bbr matrix: ${NORM_DIR}/diff2str_bbr_sn.mat"
+# echof "dartel deformation:${NORM_DIR}/y_dartel_str2mni.nii" 
+
+#if [ -f ${NORM_DIR}/diff2str_bbr_sn.mat ] && [ -f ${NORM_DIR}/y_dartel_str2mni.nii ];then
+#echo "normalize estimation data already exist: ${NORM_DIR}/y_dartel_str2mni.nii&&diff2str_sn.mat" >> $logpath
+#else
+
+#if [ ! -f ${NORM_DIR}/y_dartel_str2mni.nii ];then
+#est2="opt_dartel.def_out='${NORM_DIR}/y_dartel_str2mni.nii'"
+#est2="${est2};opt_dartel.method='dartel'"
+#est2="${est2};addpath('$chimgen')"
+#est2="${est2};bqw_spm_normalize_estimate('${T1}','',opt_dartel);exit"
+#cmd_dartel_est="matlab -nosplash -nodesktop -r \"$est2\""
+#echof $cmd_dartel_est
+#tmp=/tmp/bqw_pipe_`date +%Y-%m-%d-%h-%m-%s-%N`
+#echo ${cmd_dartel_est} >$tmp
+#chmod +x $tmp
+#run $tmp
+#wait
+#if [ ! -f ${NORM_DIR}/y_dartel_str2mni.nii ];then
+#run cp ${PIPE_T1_DIR}/mri/y_*.nii  ${NORM_DIR}/y_dartel_str2mni.nii
+#run cp ${PIPE_T1_DIR}/mri/wm*.nii ${NORM_DIR}/
+#fi
+#fi
+#
+#if [ ! -f ${NORM_DIR}/diff2str_bbr_sn.mat ];then
+#b0norm=${NORM_DIR}/${b0##*/}
+#if [ ! -f ${b0norm} ];then
+#run cp ${b0} $b0norm
+#fi
+#if [ ! -f ${b0norm%.gz*} ];then
+#run gunzip  $b0norm
+#fi
+#if [ -f $b0norm ];then
+#run rm -f $b0norm
+#fi
+#
+#est1="opt_bbr.def_out='${NORM_DIR}/diff2str_bbr_sn.mat'"
+#est1="${est1};opt_bbr.method='bbr'"
+#est1="${est1};addpath('$chimgen')"
+#est1="${est1};bqw_spm_normalize_estimate('${b0norm%.gz*}','${T1}',opt_bbr);exit"
+#cmd_bbr_est="matlab -nosplash -nodesktop -r \"$est1\""
+#echof ${cmd_bbr_est}
+#script=/tmp/bqw_pipe_`date +%Y-%m-%d-%h-%m-%s-%N`
+#echo ${cmd_bbr_est} >$script
+#chmod +x $script
+#run $script
+#wait
+#fi
+#t2=`date +%s`
+#tu=$((t2-t1))
+#echof -e "------finish normalize estimation in $tu seconds ------\n"
+#
+#t1=`date +%s`
+#step7 normalization write
+#echof -e "Step[7]: Write diffusion metrics into MNI space(bbr+dartel)"
+#tmpf=`ls ${NORM_DIR}/MNI*clean.nii*`
+#if [ -z "$tmpf" ];then
+#run cp  ${DIFF_FIT_DIR}/*clean.nii* ${NORM_DIR}/
+#run gunzip -f ${NORM_DIR}/*clean.nii.gz
+#ls  ${NORM_DIR}/*_clean.nii > ${NORM_DIR}/metric_list
+#b0norm=${NORM_DIR}/${b0##*/}
+#tmp=${b0norm%.gz*}
+#if [ ! -f ${tmp} ];then
+#run cp ${b0} $b0norm
+#run gunzip  $b0norm
+#fi
+#ls ${tmp} >> ${NORM_DIR}/metric_list
+#wrt="addpath('$chimgen')"
+#wrt="${wrt};opt.voxsize=$voxsize"
+#wrt="${wrt};bqw_spm_normalize_write('${NORM_DIR}/metric_list','${NORM_DIR}/y_dartel_str2mni.nii','${NORM_DIR}/diff2str_bbr_sn.mat',opt);exit"
+#cmd_norm_wrt="matlab -nosplash -nodesktop -r \"$wrt\""
+#echof ${cmd_norm_wrt}
+#tmp=/tmp/bqw_pipe_`date +%Y-%m-%d-%h-%m-%s-%N`
+#echo ${cmd_norm_wrt} >$tmp
+#chmod +x $tmp
+#run $tmp
+#wait
+#rm  `cat ${NORM_DIR}/metric_list` -f
+#else
+#echof -e "diffusion metrics already exist; ${NORM_DIR}/MNI_fdt_FA_clean.nii"
+#fi
+#t2=`date +%s`
+#tu=$((t2-t1))
+#echof -e "------finished metric normalization writing in $tu seconds------\n"
+#fi
+
+echof -e "=======Finished diffusion pipeline========"
+endtime=`date +'%Y-%m-%d %H:%M:%S'`
+end_seconds=$(date --date="$endtime" +%s)
+timeused=$((end_seconds-start_seconds))
+echof -e "end time: $endtime"
+if [ $timeused -lt 60 ];then
+echof -e "Pipeline total time used: $timeused seconds"
+elif [ $timeused -lt 3600 ];then
+echof "Pipeline total time used: $((timeused/60)) minutes"
+else
+echof  "Pipeline total time used: `echo "scale=2;${timeused}/3600"|bc` hours"
+fi
+exit 0
+}
+
+#######################
+# help comments
+#######################
+usage ()
+{
+cat <<__EOM__
+============diffusion processing pipeline for single job============
+Usage: pipe_diff [options]
+-------------------------------------------
+Prerequisite:
+   --datain	Input diffusion data
+   --outdir	Output directory
+   --t1dir	T1 working directory (providing dartel flow: "mri/y_*.nii")
+Optional:
+   --t1data	Input T1 data(used for normalization using CAT12 when dartel flow is not create)
+   --model	diffusion model used to estimate the measures: dti(default),dki
+   --fibmodel	diffusion model used to estimate the fiber orientation: dti(default),hardi,bedpostx
+   --gradT	gradient transformation direction: -ix,-iy,-iz(default),-sxy,-syz,-szx
+   --pipe	pipelines: full(default), prep,quant,track
+   --voxsize	reslice voxel size in normalization
+COMMENTS:
+--Processing steps
+Step[1]: Brain Extract(bet)
+Step[2]: Motion and distortion correction(eddy_openmp)
+Step[3]: DTI reconstruction(dtifit or dki_hyu)
+Step[4]: Deterministic fiber orientation estimation (dtk)
+Step[5]: Probabilistic fiber orientation estimation(bedpostx)
+Step[6]: Spatial normalization estimation(bbr+dartel)
+Step[7]: Write diffusion metrics into MNI space(using bbr+dartel)
+--Pipelines
+full:full step pipeline[1:7]
+prep:preprocessing pipeline[1 2]
+quant:quantification pipeline (VBA/TBSS),[1 2 3 6 7];
+track:fiber tracking pipeline[1 2 3 4 6 7](dti,hardi) or [1 2 3 5 6 7](bedpostx);
+Examples:
+1. run from start to end
+pipe_diff --datain=/raw/subj01/data.nii.gz --outdir=/pipe/subj01 --t1dir=/t1/subj01 --t1data=/rawt1/subj01/T1.nii 
+2. run based on the finished cat12 workflow (t1dir must contain dartel flow: mri/y_*.nii)
+pipe_diff --datain=/raw/subj01/data.nii.gz --outdir=/pipe/subj01 --t1dir=/t1/subj01
+3. run the tensor-based quantification pipeline
+pipe_diff --datain=/raw/subj01/data.nii.gz --outdir=/pipe/subj01 --t1dir=/t1/subj01 --t1data=/rawt1/subj01/T1.nii --pipe=quant
+4. run the dki-based quantification pipeline
+pipe_diff --datain=/raw/subj01/data.nii.gz --outdir=/pipe/subj01 --t1dir=/t1/subj01 --t1data=/rawt1/subj01/T1.nii --pipe=quant --model=dki
+5. run the deterministic trakcing pipeline
+pipe_diff --datain=/raw/subj01/data.nii.gz --outdir=/pipe/subj01 --t1dir=/t1/subj01 --t1data=/rawt1/subj01/T1.nii --pipe=track
+6.  run the deterministic trakcing pipeline using hardi model
+pipe_diff --datain=/raw/subj01/data.nii.gz --outdir=/pipe/subj01 --t1dir=/t1/subj01 --t1data=/rawt1/subj01/T1.nii --pipe=track --fibmodel=hardi
+
+------------------Writen by QinWen at 20190116 ----------------------
+__EOM__
+}
+
+########################
+# check empty arguments
+########################
+
+empty_arg ()
+{
+  local argname argval
+  argname="$1"
+  shift
+  argval="$*"
+  if [ -z "$argval" ]; then
+    echo "ERROR: Missing argument value: \"$argname\""
+    exit 1
+  fi
+}
+
+## main code execute
+main  ${1+"$@"}
+

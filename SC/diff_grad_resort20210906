@@ -1,0 +1,106 @@
+#!/bin/bash
+usage() {
+cat <<__help__
+======== resort dwi data with bvals ascending order ========
+usage: $0 diffin outdir bvec bval
+Options:
+  diffin: input diffusion file 
+  outdir: output directory
+  bvec:   gradient table  path
+  bval:   b value path
+------------- Qin, Wen at 20210906 ---------------
+__help__
+}
+
+
+if [ $# -lt 1 ]
+  then 
+  usage
+  exit 1
+fi
+diffin=$1
+outdir=$2
+bvec=$3
+bval=$4
+
+infile=${diffin##*/}
+indir=${diffin%/*}
+if [ "${indir:0:1}" != "/" ]
+  then
+  indir=${PWD}/$indir
+  diffin=$indir/$infile
+fi
+
+
+
+inext=${infile#*.}
+if [ $# -lt 2 ]
+  then
+  outdir=$indir
+fi
+if [ $# -lt 3 ]
+  then
+  bvec=$indir/bvecs
+fi
+if [ $# -lt 4 ]
+  then
+  bval=$indir/bvals
+fi
+
+if [ "${bvec:0:1}" != "/" ]
+  then
+  bvec=${PWD}/$bvec
+fi
+
+if [ "${bval:0:1}" != "/" ]
+  then
+  bval=${PWD}/$bval
+fi
+
+if [ "${outdir:0:1}" != "/" ]
+  then
+  outdir=${PWD}/$outdir
+fi
+
+echo diffin: $diffin
+echo outdir: $outdir
+echo bvec: $bvec
+echo bval: $bval
+
+
+if [ ! -d $outdir ]
+  then
+  mkdir $outdir
+fi
+cd $outdir
+transpose $bvec bvecsT
+transpose $bval bvalsT
+nb=`sort -n bvalsT|uniq`
+rm -f nb*sT
+c=1;
+for b in $nb;do
+rowid=`cat bvalsT|awk '/^'$b'$/{print NR}'`
+for r in $rowid;do
+sed -n "$r"p bvalsT >> nbvalsT
+sed -n "$r"p bvecsT >> nbvecsT
+r_1=`echo ${r}-1|bc `
+if [ ${#c} = 1 ];
+then pref=0000$c;
+elif [ ${#c} = 2 ];
+then pref=000$c
+elif [ ${#c} = 3 ];
+then pref=00$c
+elif [ ${#c} = 4 ];
+then pref=0$c;
+fi
+fslroi $diffin ${pref}_${b}_reorder_${r} ${r_1} 1
+echo ${pref} - bval$b - ndir$r
+c=$((c+1))
+done
+done
+fslmerge -t dti *_reorder_*
+rm -f *_reorder_*
+transpose nbvalsT bvals
+transpose nbvecsT bvecs
+mv -f nbvalsT bvalsT
+mv -f nbvecsT bvecsT
